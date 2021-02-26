@@ -88,7 +88,7 @@ exc = getattr(builtins, "IOError", "FileNotFoundError")
 # loop below.
 def unpack_batch(b):
     # Experiment with unweighted samples
-    return b[0], b[1], b[2], b[3], torch.ones(b[3].size()), None
+    return b[0], b[1], b[2], b[3]
 
 
 ### define dlrm in PyTorch ###
@@ -332,7 +332,6 @@ def run():
     parser.add_argument("--print-time", action="store_true", default=False)
     parser.add_argument("--print-wall-time", action="store_true", default=False)
     parser.add_argument("--debug-mode", action="store_true", default=False)
-    parser.add_argument("--enable-profiling", action="store_true", default=False)
 
     global args
     global nbatches
@@ -445,7 +444,7 @@ def run():
 
         print("data (inputs and targets):")
         for j, inputBatch in enumerate(train_ld):
-            X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
+            X, lS_o, lS_i, T = unpack_batch(inputBatch)
 
             torch.set_printoptions(precision=4)
             # early exit if nbatches was set by the user and has been exceeded
@@ -503,68 +502,65 @@ def run():
 
     print("time/loss/accuracy (if enabled):")
 
-    with torch.autograd.profiler.profile(
-        args.enable_profiling, use_gpu, record_shapes=True
-    ) as prof:
-        k = 0
-        total_time_begin = 0
-        while k < args.nepochs:
+    k = 0
+    total_time_begin = 0
+    while k < args.nepochs:
 
-            for j, inputBatch in enumerate(train_ld):
+        for j, inputBatch in enumerate(train_ld):
 
-                X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
+            X, lS_o, lS_i, T = unpack_batch(inputBatch)
 
-                t1 = time.time()
+            t1 = time.time()
 
-                # early exit if nbatches was set by the user and has been exceeded
-                if nbatches > 0 and j >= nbatches:
-                    break
+            # early exit if nbatches was set by the user and has been exceeded
+            if nbatches > 0 and j >= nbatches:
+                break
 
-                mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
+            mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
 
-                # forward
-                Z = dlrm(X, lS_o, lS_i)
-                E = dlrm.loss_fn(Z, T)
+            # forward
+            Z = dlrm(X, lS_o, lS_i)
+            E = dlrm.loss_fn(Z, T)
 
-                # backward and weight update
-                optimizer.zero_grad()
-                E.backward()
-                optimizer.step()
+            # backward and weight update
+            optimizer.zero_grad()
+            E.backward()
+            optimizer.step()
 
-                t2 = time.time()
-                total_time += t2 - t1
+            t2 = time.time()
+            total_time += t2 - t1
 
-                L = E.detach().numpy()  # numpy array
-                total_loss += L * mbs
-                total_iter += 1
-                total_samp += mbs
+            L = E.detach().numpy()  # numpy array
+            total_loss += L * mbs
+            total_iter += 1
+            total_samp += mbs
 
-                should_print = ((j + 1) % args.print_freq == 0) or (
-                    j + 1 == nbatches
+            should_print = ((j + 1) % args.print_freq == 0) or (
+                j + 1 == nbatches
+            )
+
+            # print time, loss and accuracy
+            if should_print:
+                gT = 1000.0 * total_time / total_iter if args.print_time else -1
+                total_time = 0
+
+                train_loss = total_loss / total_samp
+                total_loss = 0
+
+                print(
+                    "Finished {} it {}/{} of epoch {}, {:.2f} ms/it,".format(
+                        "training", j + 1, nbatches, k, gT
+                    )
+                    + " loss {:.6f}".format(train_loss),
+                    flush=True,
                 )
 
-                # print time, loss and accuracy
-                if should_print:
-                    gT = 1000.0 * total_time / total_iter if args.print_time else -1
-                    total_time = 0
+                log_iter = nbatches * k + j + 1
 
-                    train_loss = total_loss / total_samp
-                    total_loss = 0
+                total_iter = 0
+                total_samp = 0
 
-                    print(
-                        "Finished {} it {}/{} of epoch {}, {:.2f} ms/it,".format(
-                            "training", j + 1, nbatches, k, gT
-                        )
-                        + " loss {:.6f}".format(train_loss),
-                        flush=True,
-                    )
-
-                    log_iter = nbatches * k + j + 1
-
-                    total_iter = 0
-                    total_samp = 0
-
-            k += 1  # nepochs
+        k += 1  # nepochs
 
     # test prints
     if args.debug_mode:
