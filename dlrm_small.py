@@ -62,11 +62,6 @@ import json
 import sys
 import time
 
-# onnx
-# The onnx import causes deprecation warnings every time workers
-# are spawned during testing. So, we filter out those warnings.
-import warnings
-
 # data generation
 import dlrm_data_pytorch as dp
 
@@ -95,13 +90,6 @@ from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
 
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
-
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-    try:
-        import onnx
-    except ImportError as error:
-        print("Unable to import onnx. ", error)
 
 # from torchviz import make_dot
 # import torch.nn.functional as Functional
@@ -322,11 +310,6 @@ class DLRM_Net(nn.Module):
             self.bot_l = self.create_mlp(ln_bot, sigmoid_bot)
             self.top_l = self.create_mlp(ln_top, sigmoid_top)
 
-            # quantization
-            self.quantize_emb = False
-            self.emb_l_q = []
-            self.quantize_bits = 32
-
             # specify the loss function
             self.loss_fn = torch.nn.MSELoss(reduction="mean")
 
@@ -361,36 +344,14 @@ class DLRM_Net(nn.Module):
             else:
                 per_sample_weights = None
 
-            if self.quantize_emb:
-                s1 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
-                s2 = self.emb_l_q[k].element_size() * self.emb_l_q[k].nelement()
-                print("quantized emb sizes:", s1, s2)
+            E = emb_l[k]
+            V = E(
+                sparse_index_group_batch,
+                sparse_offset_group_batch,
+                per_sample_weights=per_sample_weights,
+            )
 
-                if self.quantize_bits == 4:
-                    QV = ops.quantized.embedding_bag_4bit_rowwise_offsets(
-                        self.emb_l_q[k],
-                        sparse_index_group_batch,
-                        sparse_offset_group_batch,
-                        per_sample_weights=per_sample_weights,
-                    )
-                elif self.quantize_bits == 8:
-                    QV = ops.quantized.embedding_bag_byte_rowwise_offsets(
-                        self.emb_l_q[k],
-                        sparse_index_group_batch,
-                        sparse_offset_group_batch,
-                        per_sample_weights=per_sample_weights,
-                    )
-
-                ly.append(QV)
-            else:
-                E = emb_l[k]
-                V = E(
-                    sparse_index_group_batch,
-                    sparse_offset_group_batch,
-                    per_sample_weights=per_sample_weights,
-                )
-
-                ly.append(V)
+            ly.append(V)
 
         # print(ly)
         return ly
@@ -636,11 +597,6 @@ def run():
     )
     # inference
     parser.add_argument("--inference-only", action="store_true", default=False)
-    # quantize
-    parser.add_argument("--quantize-mlp-with-bit", type=int, default=32)
-    parser.add_argument("--quantize-emb-with-bit", type=int, default=32)
-    # onnx
-    parser.add_argument("--save-onnx", action="store_true", default=False)
     # gpu
     parser.add_argument("--use-gpu", action="store_true", default=False)
     # distributed
@@ -680,15 +636,6 @@ def run():
             sys.exit("ERROR: quotient remainder with weighted pooling is not supported")
         if args.md_flag:
             sys.exit("ERROR: mixed dimensions with weighted pooling is not supported")
-    if args.quantize_emb_with_bit in [4, 8]:
-        if args.qr_flag:
-            sys.exit(
-                "ERROR: 4 and 8-bit quantization with quotient remainder is not supported"
-            )
-        if args.md_flag:
-            sys.exit(
-                "ERROR: 4 and 8-bit quantization with mixed dimensions is not supported"
-            )
 
     ### some basic setup ###
     np.random.seed(args.numpy_rand_seed)
@@ -949,8 +896,6 @@ def run():
                 continue
 
             for j, inputBatch in enumerate(train_ld):
-                if j == 0 and args.save_onnx:
-                    X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(inputBatch)
 
                 if j < skip_upto_batch:
                     continue
