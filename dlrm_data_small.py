@@ -40,8 +40,6 @@ class RandomDataset(Dataset):
             rand_data_dist="uniform",
             rand_data_min=1,
             rand_data_max=1,
-            rand_data_mu=-1,
-            rand_data_sigma=1,
             rand_seed=0
     ):
         # compute batch size
@@ -66,8 +64,6 @@ class RandomDataset(Dataset):
         self.rand_data_dist = rand_data_dist
         self.rand_data_min = rand_data_min
         self.rand_data_max = rand_data_max
-        self.rand_data_mu = rand_data_mu
-        self.rand_data_sigma = rand_data_sigma
 
     def reset_numpy_seed(self, numpy_rand_seed):
         np.random.seed(numpy_rand_seed)
@@ -101,8 +97,6 @@ class RandomDataset(Dataset):
             rand_data_dist=self.rand_data_dist,
             rand_data_min=self.rand_data_min,
             rand_data_max=self.rand_data_max,
-            rand_data_mu=self.rand_data_mu,
-            rand_data_sigma=self.rand_data_sigma,
         )
 
         # generate a batch of target (probability of a click)
@@ -145,8 +139,6 @@ def generate_dist_input_batch(
     rand_data_dist,
     rand_data_min,
     rand_data_max,
-    rand_data_mu,
-    rand_data_sigma,
 ):
     # dense feature
     Xt = torch.tensor(ra.rand(n, m_den).astype(np.float32))
@@ -171,18 +163,9 @@ def generate_dist_input_batch(
                     np.round(max([1.0], r * min(size, num_indices_per_lookup)))
                 )
             # sparse indices to be used per embedding
-            if rand_data_dist == "gaussian":
-                if rand_data_mu == -1:
-                    rand_data_mu = (rand_data_max + rand_data_min) / 2.0
-                r = ra.normal(rand_data_mu, rand_data_sigma, sparse_group_size)
-                sparse_group = np.clip(r, rand_data_min, rand_data_max)
-                sparse_group = np.unique(sparse_group).astype(np.int64)
-            elif rand_data_dist == "uniform":
-                r = ra.random(sparse_group_size)
-                sparse_group = np.unique(np.round(r * (size - 1)).astype(np.int64))
-            else:
-                raise(rand_data_dist, "distribution is not supported. \
-                     please select uniform or gaussian")
+            assert rand_data_dist == "uniform"
+            r = ra.random(sparse_group_size)
+            sparse_group = np.unique(np.round(r * (size - 1)).astype(np.int64))
 
             # reset sparse_group_size in case some index duplicates were removed
             sparse_group_size = np.int64(sparse_group.size)
@@ -210,11 +193,8 @@ def make_random_data_and_loader(args, ln_emb, m_den):
         1,  # num_targets
         args.round_targets,
         reset_seed_on_access=True,
-        rand_data_dist=args.rand_data_dist,
         rand_data_min=args.rand_data_min,
         rand_data_max=args.rand_data_max,
-        rand_data_mu=args.rand_data_mu,
-        rand_data_sigma=args.rand_data_sigma,
         rand_seed=args.numpy_rand_seed
     )  # WARNING: generates a batch of lookups at once
 
