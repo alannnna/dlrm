@@ -63,7 +63,7 @@ import sys
 import time
 
 # data generation
-import dlrm_data_pytorch as dp
+import dlrm_data_small as dp
 
 # numpy
 import numpy as np
@@ -604,33 +604,12 @@ def run():
     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
     # input data
 
-    if args.data_generation == "dataset":
-        train_data, train_ld, test_data, test_ld = dp.make_criteo_data_and_loaders(args)
-        table_feature_map = {idx: idx for idx in range(len(train_data.counts))}
-        nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
-        nbatches_test = len(test_ld)
-
-        ln_emb = train_data.counts
-        # enforce maximum limit on number of vectors per embedding
-        if args.max_ind_range > 0:
-            ln_emb = np.array(
-                list(
-                    map(
-                        lambda x: x if x < args.max_ind_range else args.max_ind_range,
-                        ln_emb,
-                    )
-                )
-            )
-        else:
-            ln_emb = np.array(ln_emb)
-        m_den = train_data.m_den
-        ln_bot[0] = m_den
-    else:
-        # input and target at random
-        ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
-        m_den = ln_bot[0]
-        train_data, train_ld = dp.make_random_data_and_loader(args, ln_emb, m_den)
-        nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
+    # Use random data
+    # input and target at random
+    ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
+    m_den = ln_bot[0]
+    train_data, train_ld = dp.make_random_data_and_loader(args, ln_emb, m_den)
+    nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
 
     args.ln_emb = ln_emb.tolist()
 
@@ -881,14 +860,9 @@ def run():
                 should_print = ((j + 1) % args.print_freq == 0) or (
                     j + 1 == nbatches
                 )
-                should_test = (
-                    (args.test_freq > 0)
-                    and (args.data_generation == "dataset")
-                    and (((j + 1) % args.test_freq == 0) or (j + 1 == nbatches))
-                )
 
                 # print time, loss and accuracy
-                if should_print or should_test:
+                if should_print:
                     gT = 1000.0 * total_time / total_iter if args.print_time else -1
                     total_time = 0
 
@@ -912,28 +886,6 @@ def run():
 
                     total_iter = 0
                     total_samp = 0
-
-                # testing
-                if should_test:
-                    epoch_num_float = (j + 1) / len(train_ld) + k + 1
-
-                    print(
-                        "Testing at - {}/{} of epoch {},".format(j + 1, nbatches, k)
-                    )
-                    model_metrics_dict, is_best = inference(
-                        args,
-                        dlrm,
-                        best_acc_test,
-                        best_auc_test,
-                        test_ld,
-                        device,
-                        use_gpu,
-                        log_iter,
-                    )
-
-                    # Uncomment the line below to print out the total time with overhead
-                    # print("Total test time for this group: {}" \
-                    # .format(time_wrap(use_gpu) - accum_test_time_begin))
 
             k += 1  # nepochs
 
