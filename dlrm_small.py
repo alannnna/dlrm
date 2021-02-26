@@ -91,20 +91,6 @@ from tricks.qr_embedding_bag import QREmbeddingBag
 exc = getattr(builtins, "IOError", "FileNotFoundError")
 
 
-def time_wrap(use_gpu):
-    return time.time()
-
-
-def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1):
-    with record_function("DLRM forward"):
-        return dlrm(X.to(device), lS_o, lS_i)
-
-
-def loss_fn_wrap(Z, T, use_gpu, device):
-    with record_function("DLRM loss compute"):
-        return dlrm.loss_fn(Z, T.to(device))
-
-
 # The following function is a wrapper to avoid checking this multiple times in th
 # loop below.
 def unpack_batch(b):
@@ -413,71 +399,6 @@ class DLRM_Net(nn.Module):
         return z
 
 
-def inference(
-    args,
-    dlrm,
-    best_acc_test,
-    best_auc_test,
-    test_ld,
-    device,
-    use_gpu,
-    log_iter=-1,
-):
-    test_accu = 0
-    test_samp = 0
-
-    for i, testBatch in enumerate(test_ld):
-        # early exit if nbatches was set by the user and was exceeded
-        if nbatches > 0 and i >= nbatches:
-            break
-
-        X_test, lS_o_test, lS_i_test, T_test, W_test, CBPP_test = unpack_batch(
-            testBatch
-        )
-
-        # forward pass
-        Z_test = dlrm_wrap(
-            X_test,
-            lS_o_test,
-            lS_i_test,
-            use_gpu,
-            device,
-            ndevices=ndevices,
-        )
-
-        with record_function("DLRM accuracy compute"):
-            # compute loss and accuracy
-            S_test = Z_test.detach().cpu().numpy()  # numpy array
-            T_test = T_test.detach().cpu().numpy()  # numpy array
-
-            mbs_test = T_test.shape[0]  # = mini_batch_size except last
-            A_test = np.sum((np.round(S_test, 0) == T_test).astype(np.uint8))
-
-            test_accu += A_test
-            test_samp += mbs_test
-
-    acc_test = test_accu / test_samp
-
-    model_metrics_dict = {
-        "nepochs": args.nepochs,
-        "nbatches": nbatches,
-        "nbatches_test": nbatches_test,
-        "state_dict": dlrm.state_dict(),
-        "test_acc": acc_test,
-    }
-
-    is_best = acc_test > best_acc_test
-    if is_best:
-        best_acc_test = acc_test
-    print(
-        " accuracy {:3.3f} %, best {:3.3f} %".format(
-            acc_test * 100, best_acc_test * 100
-        ),
-        flush=True,
-    )
-    return model_metrics_dict, is_best
-
-
 def run():
     ### parse arguments ###
     parser = argparse.ArgumentParser(
@@ -702,7 +623,7 @@ def run():
             print(T.detach().cpu())
 
     global ndevices
-    ndevices = min(ngpus, args.mini_batch_size, num_fea - 1) if use_gpu else -1
+    ndevices = -1  # since not on GPU
 
     ### construct the neural network specified above ###
     # WARNING: to obtain exactly the same initialization for
@@ -720,6 +641,7 @@ def run():
         sigmoid_top=ln_top.size - 2,
         loss_threshold=args.loss_threshold,
         ndevices=ndevices,
+        # special config
         qr_flag=args.qr_flag,
         qr_operation=args.qr_operation,
         qr_collisions=args.qr_collisions,
@@ -775,7 +697,7 @@ def run():
 
                 X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
 
-                t1 = time_wrap(use_gpu)
+                t1 = time.time()
 
                 # early exit if nbatches was set by the user and has been exceeded
                 if nbatches > 0 and j >= nbatches:
@@ -784,17 +706,10 @@ def run():
                 mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
 
                 # forward pass
-                Z = dlrm_wrap(
-                    X,
-                    lS_o,
-                    lS_i,
-                    use_gpu,
-                    device,
-                    ndevices=ndevices,
-                )
+                Z = dlrm(X, lS_o, lS_i)
 
                 # loss
-                E = loss_fn_wrap(Z, T, use_gpu, device)
+                E = dlrm.loss_fn(Z, T)
 
                 # compute loss and accuracy
                 L = E.detach().cpu().numpy()  # numpy array
@@ -808,7 +723,7 @@ def run():
                     optimizer.step()
                     lr_scheduler.step()
 
-                t2 = time_wrap(use_gpu)
+                t2 = time.time()
                 total_time += t2 - t1
 
                 total_loss += L * mbs
