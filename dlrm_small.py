@@ -57,8 +57,6 @@ import argparse
 
 # miscellaneous
 import builtins
-import datetime
-import json
 import sys
 import time
 
@@ -67,14 +65,11 @@ import dlrm_data_small as dp
 
 # numpy
 import numpy as np
-import sklearn.metrics
 
 # pytorch
 import torch
 import torch.nn as nn
-from torch._ops import ops
-from torch.autograd.profiler import record_function
-from torch.nn.parallel.scatter_gather import gather, scatter
+from torch.nn.parallel.scatter_gather import gather
 from torch.nn.parameter import Parameter
 
 # from torchviz import make_dot

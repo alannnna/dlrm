@@ -1,24 +1,13 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
-# others
-from os import path
-import sys
-import bisect
-import collections
-
-import data_utils
-
 # numpy
 import numpy as np
 from numpy import random as ra
-from collections import deque
-
 
 # pytorch
 import torch
-from torch.utils.data import Dataset, RandomSampler
+from torch.utils.data import Dataset
 
-import data_loader_terabyte
 import mlperf_logger
 
 
