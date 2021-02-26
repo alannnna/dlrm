@@ -165,7 +165,6 @@ class DLRM_Net(nn.Module):
         sigmoid_bot=-1,
         sigmoid_top=-1,
         loss_threshold=0.0,
-        ndevices=-1,
         weighted_pooling=None,
     ):
         super(DLRM_Net, self).__init__()
@@ -179,7 +178,6 @@ class DLRM_Net(nn.Module):
         ):
 
             # save arguments
-            self.ndevices = ndevices
             self.output_d = 0
             self.parallel_model_batch_size = -1
             self.parallel_model_is_not_prepared = True
@@ -192,14 +190,13 @@ class DLRM_Net(nn.Module):
                 self.weighted_pooling = weighted_pooling
 
             # create operators
-            if ndevices <= 1:
-                self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
-                if self.weighted_pooling == "learned":
-                    self.v_W_l = nn.ParameterList()
-                    for w in w_list:
-                        self.v_W_l.append(Parameter(w))
-                else:
-                    self.v_W_l = w_list
+            self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
+            if self.weighted_pooling == "learned":
+                self.v_W_l = nn.ParameterList()
+                for w in w_list:
+                    self.v_W_l.append(Parameter(w))
+            else:
+                self.v_W_l = w_list
             self.bot_l = self.create_mlp(ln_bot, sigmoid_bot)
             self.top_l = self.create_mlp(ln_top, sigmoid_top)
 
@@ -285,9 +282,6 @@ class DLRM_Net(nn.Module):
         return R
 
     def forward(self, dense_x, lS_o, lS_i):
-        assert self.ndevices <= 1
-        # single device run
-
         # process dense features (using bottom mlp), resulting in a row vector
         x = self.apply_mlp(dense_x, self.bot_l)
         # debug prints
@@ -493,9 +487,6 @@ def run():
             print([S_i.detach().cpu() for S_i in lS_i])
             print(T.detach().cpu())
 
-    global ndevices
-    ndevices = -1  # since not on GPU
-
     ### construct the neural network specified above ###
     # WARNING: to obtain exactly the same initialization for
     # the weights we need to start from the same random seed.
@@ -511,7 +502,6 @@ def run():
         sigmoid_bot=-1,
         sigmoid_top=ln_top.size - 2,
         loss_threshold=args.loss_threshold,
-        ndevices=ndevices,
         weighted_pooling=args.weighted_pooling,
     )
 
