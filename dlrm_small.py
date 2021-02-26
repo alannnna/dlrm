@@ -77,12 +77,6 @@ from torch.autograd.profiler import record_function
 from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 
-# mixed-dimension trick
-from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
-
-# quotient-remainder trick
-from tricks.qr_embedding_bag import QREmbeddingBag
-
 # from torchviz import make_dot
 # import torch.nn.functional as Functional
 # from torch.nn.parameter import Parameter
@@ -146,37 +140,13 @@ class DLRM_Net(nn.Module):
             n = ln[i]
 
             # construct embedding operator
-            if self.qr_flag and n > self.qr_threshold:
-                EE = QREmbeddingBag(
-                    n,
-                    m,
-                    self.qr_collisions,
-                    operation=self.qr_operation,
-                    mode="sum",
-                    sparse=True,
-                )
-            elif self.md_flag and n > self.md_threshold:
-                base = max(m)
-                _m = m[i] if n > self.md_threshold else base
-                EE = PrEmbeddingBag(n, _m, base)
-                # use np initialization as below for consistency...
-                W = np.random.uniform(
-                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, _m)
-                ).astype(np.float32)
-                EE.embs.weight.data = torch.tensor(W, requires_grad=True)
-            else:
-                EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
-                # initialize embeddings
-                # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-                W = np.random.uniform(
-                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
-                ).astype(np.float32)
-                # approach 1
-                EE.weight.data = torch.tensor(W, requires_grad=True)
-                # approach 2
-                # EE.weight.data.copy_(torch.tensor(W))
-                # approach 3
-                # EE.weight = Parameter(torch.tensor(W),requires_grad=True)
+            EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
+            # initialize embeddings
+            # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
+            W = np.random.uniform(
+                low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
+            ).astype(np.float32)
+            EE.weight.data = torch.tensor(W, requires_grad=True)
             if weighted_pooling is None:
                 v_W_l.append(None)
             else:
@@ -196,12 +166,6 @@ class DLRM_Net(nn.Module):
         sigmoid_top=-1,
         loss_threshold=0.0,
         ndevices=-1,
-        qr_flag=False,
-        qr_operation="mult",
-        qr_collisions=0,
-        qr_threshold=200,
-        md_flag=False,
-        md_threshold=200,
         weighted_pooling=None,
     ):
         super(DLRM_Net, self).__init__()
@@ -226,16 +190,6 @@ class DLRM_Net(nn.Module):
                 self.weighted_pooling = "learned"
             else:
                 self.weighted_pooling = weighted_pooling
-            # create variables for QR embedding if applicable
-            self.qr_flag = qr_flag
-            if self.qr_flag:
-                self.qr_collisions = qr_collisions
-                self.qr_operation = qr_operation
-                self.qr_threshold = qr_threshold
-            # create variables for MD embedding if applicable
-            self.md_flag = md_flag
-            if self.md_flag:
-                self.md_threshold = md_threshold
 
             # create operators
             if ndevices <= 1:
@@ -379,15 +333,6 @@ def run():
     )
     parser.add_argument("--arch-interaction-itself", action="store_true", default=False)
     parser.add_argument("--weighted-pooling", type=str, default=None)
-    # embedding table options
-    parser.add_argument("--md-flag", action="store_true", default=False)
-    parser.add_argument("--md-threshold", type=int, default=200)
-    parser.add_argument("--md-temperature", type=float, default=0.3)
-    parser.add_argument("--md-round-dims", action="store_true", default=False)
-    parser.add_argument("--qr-flag", action="store_true", default=False)
-    parser.add_argument("--qr-threshold", type=int, default=200)
-    parser.add_argument("--qr-operation", type=str, default="mult")
-    parser.add_argument("--qr-collisions", type=int, default=4)
     # activations and loss
     parser.add_argument("--loss-threshold", type=float, default=0.0)  # 1.0e-7
     parser.add_argument("--round-targets", type=bool, default=False)
@@ -419,12 +364,6 @@ def run():
     global nbatches
     global nbatches_test
     args = parser.parse_args()
-
-    if args.weighted_pooling is not None:
-        if args.qr_flag:
-            sys.exit("ERROR: quotient remainder with weighted pooling is not supported")
-        if args.md_flag:
-            sys.exit("ERROR: mixed dimensions with weighted pooling is not supported")
 
     ### some basic setup ###
     np.random.seed(args.numpy_rand_seed)
@@ -483,30 +422,13 @@ def run():
             + " does not match first dim of bottom mlp "
             + str(ln_bot[0])
         )
-    if args.qr_flag:
-        if args.qr_operation == "concat" and 2 * m_spa != m_den_out:
-            sys.exit(
-                "ERROR: 2 arch-sparse-feature-size "
-                + str(2 * m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-                + " (note that the last dim of bottom mlp must be 2x the embedding dim)"
-            )
-        if args.qr_operation != "concat" and m_spa != m_den_out:
-            sys.exit(
-                "ERROR: arch-sparse-feature-size "
-                + str(m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-            )
-    else:
-        if m_spa != m_den_out:
-            sys.exit(
-                "ERROR: arch-sparse-feature-size "
-                + str(m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-            )
+    if m_spa != m_den_out:
+        sys.exit(
+            "ERROR: arch-sparse-feature-size "
+            + str(m_spa)
+            + " does not match last dim of bottom mlp "
+            + str(m_den_out)
+        )
     if num_int != ln_top[0]:
         sys.exit(
             "ERROR: # of feature interactions "
@@ -514,15 +436,6 @@ def run():
             + " does not match first dimension of top mlp "
             + str(ln_top[0])
         )
-
-    # assign mixed dimensions if applicable
-    if args.md_flag:
-        m_spa = md_solver(
-            torch.tensor(ln_emb),
-            args.md_temperature,  # alpha
-            d0=m_spa,
-            round_dim=args.md_round_dims,
-        ).tolist()
 
     # test prints (model arch)
     if args.debug_mode:
@@ -599,13 +512,6 @@ def run():
         sigmoid_top=ln_top.size - 2,
         loss_threshold=args.loss_threshold,
         ndevices=ndevices,
-        # special config
-        qr_flag=args.qr_flag,
-        qr_operation=args.qr_operation,
-        qr_collisions=args.qr_collisions,
-        qr_threshold=args.qr_threshold,
-        md_flag=args.md_flag,
-        md_threshold=args.md_threshold,
         weighted_pooling=args.weighted_pooling,
     )
 
@@ -620,11 +526,6 @@ def run():
 
     ### main loop ###
 
-    # training or inference
-    best_acc_test = 0
-    best_auc_test = 0
-    skip_upto_epoch = 0
-    skip_upto_batch = 0
     total_time = 0
     total_loss = 0
     total_iter = 0
@@ -639,13 +540,7 @@ def run():
         total_time_begin = 0
         while k < args.nepochs:
 
-            if k < skip_upto_epoch:
-                continue
-
             for j, inputBatch in enumerate(train_ld):
-
-                if j < skip_upto_batch:
-                    continue
 
                 X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
 
@@ -657,26 +552,19 @@ def run():
 
                 mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
 
-                # forward pass
+                # forward
                 Z = dlrm(X, lS_o, lS_i)
-
-                # loss
                 E = dlrm.loss_fn(Z, T)
 
-                # compute loss and accuracy
-                L = E.detach().cpu().numpy()  # numpy array
-
-                with record_function("DLRM backward"):
-                    optimizer.zero_grad()
-                    # backward pass
-                    E.backward()
-
-                    # optimizer
-                    optimizer.step()
+                # backward and weight update
+                optimizer.zero_grad()
+                E.backward()
+                optimizer.step()
 
                 t2 = time.time()
                 total_time += t2 - t1
 
+                L = E.detach().numpy()  # numpy array
                 total_loss += L * mbs
                 total_iter += 1
                 total_samp += mbs
@@ -693,16 +581,11 @@ def run():
                     train_loss = total_loss / total_samp
                     total_loss = 0
 
-                    wall_time = ""
-                    if args.print_wall_time:
-                        wall_time = " ({})".format(time.strftime("%H:%M"))
-
                     print(
                         "Finished {} it {}/{} of epoch {}, {:.2f} ms/it,".format(
                             "training", j + 1, nbatches, k, gT
                         )
-                        + " loss {:.6f}".format(train_loss)
-                        + wall_time,
+                        + " loss {:.6f}".format(train_loss),
                         flush=True,
                     )
 
@@ -712,20 +595,6 @@ def run():
                     total_samp = 0
 
             k += 1  # nepochs
-
-    # profiling
-    if args.enable_profiling:
-        time_stamp = str(datetime.datetime.now()).replace(" ", "_")
-        with open("dlrm_s_pytorch" + time_stamp + "_shape.prof", "w") as prof_f:
-            prof_f.write(
-                prof.key_averages(group_by_input_shape=True).table(
-                    sort_by="self_cpu_time_total"
-                )
-            )
-        with open("dlrm_s_pytorch" + time_stamp + "_total.prof", "w") as prof_f:
-            prof_f.write(prof.key_averages().table(sort_by="self_cpu_time_total"))
-        prof.export_chrome_trace("dlrm_s_pytorch" + time_stamp + ".json")
-        # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
     # test prints
     if args.debug_mode:
