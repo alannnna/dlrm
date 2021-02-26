@@ -426,10 +426,6 @@ def inference(
     test_accu = 0
     test_samp = 0
 
-    if args.mlperf_logging:
-        scores = []
-        targets = []
-
     for i, testBatch in enumerate(test_ld):
         # early exit if nbatches was set by the user and was exceeded
         if nbatches > 0 and i >= nbatches:
@@ -517,30 +513,15 @@ def run():
     parser.add_argument("--num-batches", type=int, default=0)
     parser.add_argument("--rand-data-min", type=float, default=0)
     parser.add_argument("--rand-data-max", type=float, default=1)
-    parser.add_argument("--data-randomize", type=str, default="total")  # or day or none
-    parser.add_argument("--max-ind-range", type=int, default=-1)
-    parser.add_argument("--data-sub-sample-rate", type=float, default=0.0)  # in [0, 1]
     parser.add_argument("--num-indices-per-lookup", type=int, default=10)
     parser.add_argument("--num-indices-per-lookup-fixed", type=bool, default=False)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--memory-map", action="store_true", default=False)
     # training
     parser.add_argument("--mini-batch-size", type=int, default=1)
     parser.add_argument("--nepochs", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--print-precision", type=int, default=5)
     parser.add_argument("--numpy-rand-seed", type=int, default=123)
-    parser.add_argument(
-        "--dataset-multiprocessing",
-        action="store_true",
-        default=False,
-        help="The Kaggle dataset can be multiprocessed in an environment \
-                        with more than 7 CPU cores and more than 20 GB of memory. \n \
-                        The Terabyte dataset can be multiprocessed in an environment \
-                        with more than 24 CPU cores and at least 1 TB of memory.",
-    )
-    # inference
-    parser.add_argument("--inference-only", action="store_true", default=False)
     # gpu
     parser.add_argument("--use-gpu", action="store_true", default=False)
     # debugging and profiling
@@ -550,16 +531,6 @@ def run():
     parser.add_argument("--print-wall-time", action="store_true", default=False)
     parser.add_argument("--debug-mode", action="store_true", default=False)
     parser.add_argument("--enable-profiling", action="store_true", default=False)
-    # mlperf logging (disables other output and stops early)
-    parser.add_argument("--mlperf-logging", action="store_true", default=False)
-    # stop at target accuracy Kaggle 0.789, Terabyte (sub-sampled=0.875) 0.8107
-    parser.add_argument("--mlperf-acc-threshold", type=float, default=0.0)
-    # stop at target AUC Terabyte (no subsampling) 0.8025
-    parser.add_argument("--mlperf-auc-threshold", type=float, default=0.0)
-    parser.add_argument("--mlperf-bin-loader", action="store_true", default=False)
-    parser.add_argument("--mlperf-bin-shuffle", action="store_true", default=False)
-    # mlperf gradient accumulation iterations
-    parser.add_argument("--mlperf-grad-accum-iter", type=int, default=1)
     # LR policy
     parser.add_argument("--lr-num-warmup-steps", type=int, default=0)
     parser.add_argument("--lr-decay-start-step", type=int, default=0)
