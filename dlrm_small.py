@@ -112,39 +112,17 @@ exc = getattr(builtins, "IOError", "FileNotFoundError")
 
 
 def time_wrap(use_gpu):
-    if use_gpu:
-        torch.cuda.synchronize()
     return time.time()
 
 
 def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1):
     with record_function("DLRM forward"):
-        if use_gpu:  # .cuda()
-            # lS_i can be either a list of tensors or a stacked tensor.
-            # Handle each case below:
-            if ndevices == 1:
-                lS_i = (
-                    [S_i.to(device) for S_i in lS_i]
-                    if isinstance(lS_i, list)
-                    else lS_i.to(device)
-                )
-                lS_o = (
-                    [S_o.to(device) for S_o in lS_o]
-                    if isinstance(lS_o, list)
-                    else lS_o.to(device)
-                )
         return dlrm(X.to(device), lS_o, lS_i)
 
 
 def loss_fn_wrap(Z, T, use_gpu, device):
     with record_function("DLRM loss compute"):
-        if args.loss_function == "mse" or args.loss_function == "bce":
-            return dlrm.loss_fn(Z, T.to(device))
-        elif args.loss_function == "wbce":
-            loss_ws_ = dlrm.loss_ws[T.data.view(-1).long()].view_as(T).to(device)
-            loss_fn_ = dlrm.loss_fn(Z, T.to(device))
-            loss_sc_ = loss_ws_ * loss_fn_
-            return loss_sc_.mean()
+        return dlrm.loss_fn(Z, T.to(device))
 
 
 # The following function is a wrapper to avoid checking this multiple times in th
@@ -369,19 +347,7 @@ class DLRM_Net(nn.Module):
             self.quantize_bits = 32
 
             # specify the loss function
-            if args.loss_function == "mse":
-                self.loss_fn = torch.nn.MSELoss(reduction="mean")
-            elif args.loss_function == "bce":
-                self.loss_fn = torch.nn.BCELoss(reduction="mean")
-            elif args.loss_function == "wbce":
-                self.loss_ws = torch.tensor(
-                    np.fromstring(args.loss_weights, dtype=float, sep="-")
-                )
-                self.loss_fn = torch.nn.BCELoss(reduction="none")
-            else:
-                sys.exit(
-                    "ERROR: --loss-function=" + args.loss_function + " is not supported"
-                )
+            self.loss_fn = torch.nn.MSELoss(reduction="mean")
 
     def apply_mlp(self, x, layers):
         # approach 1: use ModuleList
@@ -855,7 +821,6 @@ def run():
     parser.add_argument("--qr-operation", type=str, default="mult")
     parser.add_argument("--qr-collisions", type=int, default=4)
     # activations and loss
-    parser.add_argument("--activation-function", type=str, default="relu")
     parser.add_argument("--loss-function", type=str, default="mse")  # or bce or wbce
     parser.add_argument(
         "--loss-weights", type=dash_separated_floats, default="1.0-1.0"
@@ -981,19 +946,8 @@ def run():
     if not args.debug_mode:
         ext_dist.init_distributed(local_rank=args.local_rank, use_gpu=use_gpu, backend=args.dist_backend)
 
-    if use_gpu:
-        torch.cuda.manual_seed_all(args.numpy_rand_seed)
-        torch.backends.cudnn.deterministic = True
-        if ext_dist.my_size > 1:
-            ngpus = 1
-            device = torch.device("cuda", ext_dist.my_local_rank)
-        else:
-            ngpus = torch.cuda.device_count()
-            device = torch.device("cuda", 0)
-        print("Using {} GPU(s)...".format(ngpus))
-    else:
-        device = torch.device("cpu")
-        print("Using CPU...")
+    device = torch.device("cpu")
+    print("Using CPU...")
 
     ### prepare training data ###
     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
@@ -1195,32 +1149,11 @@ def run():
             print(param.detach().cpu().numpy())
         # print(dlrm)
 
-    if use_gpu:
-        # Custom Model-Data Parallel
-        # the mlps are replicated and use data parallelism, while
-        # the embeddings are distributed and use model parallelism
-        dlrm = dlrm.to(device)  # .cuda()
-        if dlrm.ndevices > 1:
-            dlrm.emb_l, dlrm.v_W_l = dlrm.create_emb(
-                m_spa, ln_emb, args.weighted_pooling
-            )
-        else:
-            if dlrm.weighted_pooling == "fixed":
-                for k, w in enumerate(dlrm.v_W_l):
-                    dlrm.v_W_l[k] = w.cuda()
-
     # distribute data parallel mlps
     if ext_dist.my_size > 1:
-        if use_gpu:
-            device_ids = [ext_dist.my_local_rank]
-            dlrm.bot_l = ext_dist.DDP(dlrm.bot_l, device_ids=device_ids)
-            dlrm.top_l = ext_dist.DDP(dlrm.top_l, device_ids=device_ids)
-        else:
-            dlrm.bot_l = ext_dist.DDP(dlrm.bot_l)
-            dlrm.top_l = ext_dist.DDP(dlrm.top_l)
+        dlrm.bot_l = ext_dist.DDP(dlrm.bot_l)
+        dlrm.top_l = ext_dist.DDP(dlrm.top_l)
 
-    if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
-        sys.exit("GPU version of Adagrad is not supported by PyTorch.")
     # specify the optimizer algorithm
     opts = {
         "sgd": torch.optim.SGD,
