@@ -170,9 +170,6 @@ class DLRM_Net(nn.Module):
         super(DLRM_Net, self).__init__()
 
         # save arguments
-        self.output_d = 0
-        self.parallel_model_batch_size = -1
-        self.parallel_model_is_not_prepared = True
         self.arch_interaction_op = arch_interaction_op
         self.arch_interaction_itself = arch_interaction_itself
         self.loss_threshold = loss_threshold
@@ -507,39 +504,38 @@ def run():
     while k < args.nepochs:
 
         for j, inputBatch in enumerate(train_ld):
+            # early exit if nbatches was set by the user and has been exceeded
+            if nbatches > 0 and j >= nbatches:
+                break
 
             X, lS_o, lS_i, T = unpack_batch(inputBatch)
 
             t1 = time.time()
 
-            # early exit if nbatches was set by the user and has been exceeded
-            if nbatches > 0 and j >= nbatches:
-                break
-
-            mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
-
+            ### The part that matters ###
             # forward
             Z = dlrm(X, lS_o, lS_i)
             E = dlrm.loss_fn(Z, T)
-
             # backward and weight update
             optimizer.zero_grad()
             E.backward()
             optimizer.step()
+            ### End part that matters ###
 
             t2 = time.time()
             total_time += t2 - t1
 
+            # Collect stats
             L = E.detach().numpy()  # numpy array
+            mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
             total_loss += L * mbs
             total_iter += 1
             total_samp += mbs
 
+            # print time, loss and accuracy
             should_print = ((j + 1) % args.print_freq == 0) or (
                 j + 1 == nbatches
             )
-
-            # print time, loss and accuracy
             if should_print:
                 gT = 1000.0 * total_time / total_iter if args.print_time else -1
                 total_time = 0
