@@ -65,10 +65,6 @@ import time
 # data generation
 import dlrm_data_pytorch as dp
 
-# For distributed run
-import extend_distributed as ext_dist
-import mlperf_logger
-
 # numpy
 import numpy as np
 import sklearn.metrics
@@ -78,12 +74,9 @@ import torch
 import torch.nn as nn
 from torch._ops import ops
 from torch.autograd.profiler import record_function
-from torch.nn.parallel.parallel_apply import parallel_apply
-from torch.nn.parallel.replicate import replicate
 from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 from torch.optim.lr_scheduler import _LRScheduler
-import optim.rwsadagrad as RowWiseSparseAdagrad
 
 # mixed-dimension trick
 from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
@@ -550,7 +543,6 @@ def run():
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--print-precision", type=int, default=5)
     parser.add_argument("--numpy-rand-seed", type=int, default=123)
-    parser.add_argument("--optimizer", type=str, default="sgd")
     parser.add_argument(
         "--dataset-multiprocessing",
         action="store_true",
@@ -816,15 +808,7 @@ def run():
             print(param.detach().cpu().numpy())
         # print(dlrm)
 
-    # specify the optimizer algorithm
-    opts = {
-        "sgd": torch.optim.SGD,
-        "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
-        "adagrad": torch.optim.Adagrad,
-    }
-
-    parameters = dlrm.parameters()
-    optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+    optimizer = torch.optim.SGD(dlrm.parameters(), lr=args.learning_rate)
     lr_scheduler = LRPolicyScheduler(
         optimizer,
         args.lr_num_warmup_steps,
