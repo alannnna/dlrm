@@ -559,8 +559,6 @@ def run():
     # debugging and profiling
     parser.add_argument("--print-freq", type=int, default=1)
     parser.add_argument("--test-freq", type=int, default=-1)
-    parser.add_argument("--test-mini-batch-size", type=int, default=-1)
-    parser.add_argument("--test-num-workers", type=int, default=-1)
     parser.add_argument("--print-time", action="store_true", default=False)
     parser.add_argument("--print-wall-time", action="store_true", default=False)
     parser.add_argument("--debug-mode", action="store_true", default=False)
@@ -596,13 +594,6 @@ def run():
     np.set_printoptions(precision=args.print_precision)
     torch.set_printoptions(precision=args.print_precision)
     torch.manual_seed(args.numpy_rand_seed)
-
-    if args.test_mini_batch_size < 0:
-        # if the parameter is not set, use the training batch size
-        args.test_mini_batch_size = args.mini_batch_size
-    if args.test_num_workers < 0:
-        # if the parameter is not set, use the same parameter for training
-        args.test_num_workers = args.num_workers
 
     use_gpu = args.use_gpu and torch.cuda.is_available()
 
@@ -870,30 +861,15 @@ def run():
 
                 # compute loss and accuracy
                 L = E.detach().cpu().numpy()  # numpy array
-                # training accuracy is not disabled
-                # S = Z.detach().cpu().numpy()  # numpy array
-                # T = T.detach().cpu().numpy()  # numpy array
-
-                # # print("res: ", S)
-
-                # # print("j, train: BCE, shifted_BCE ", j, L, L_shifted)
-
-                # mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
-                # A = np.sum((np.round(S, 0) == T).astype(np.uint8))
-                # A_shifted = np.sum((np.round(S_shifted, 0) == T).astype(np.uint8))
 
                 with record_function("DLRM backward"):
-                    # scaled error gradient propagation
-                    # (where we do not accumulate gradients across mini-batches)
-                    if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
-                        optimizer.zero_grad()
+                    optimizer.zero_grad()
                     # backward pass
                     E.backward()
 
                     # optimizer
-                    if (args.mlperf_logging and (j + 1) % args.mlperf_grad_accum_iter == 0) or not args.mlperf_logging:
-                        optimizer.step()
-                        lr_scheduler.step()
+                    optimizer.step()
+                    lr_scheduler.step()
 
                 t2 = time_wrap(use_gpu)
                 total_time += t2 - t1
@@ -980,8 +956,6 @@ def run():
         print("updated parameters (weights and bias):")
         for param in dlrm.parameters():
             print(param.detach().cpu().numpy())
-
-    total_time_end = time_wrap(use_gpu)
 
 
 if __name__ == "__main__":
