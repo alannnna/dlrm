@@ -794,57 +794,18 @@ def inference(
         if ext_dist.my_size > 1:
             Z_test = ext_dist.all_gather(Z_test, batch_split_lengths)
 
-        if args.mlperf_logging:
+        with record_function("DLRM accuracy compute"):
+            # compute loss and accuracy
             S_test = Z_test.detach().cpu().numpy()  # numpy array
             T_test = T_test.detach().cpu().numpy()  # numpy array
-            scores.append(S_test)
-            targets.append(T_test)
-        else:
-            with record_function("DLRM accuracy compute"):
-                # compute loss and accuracy
-                S_test = Z_test.detach().cpu().numpy()  # numpy array
-                T_test = T_test.detach().cpu().numpy()  # numpy array
 
-                mbs_test = T_test.shape[0]  # = mini_batch_size except last
-                A_test = np.sum((np.round(S_test, 0) == T_test).astype(np.uint8))
+            mbs_test = T_test.shape[0]  # = mini_batch_size except last
+            A_test = np.sum((np.round(S_test, 0) == T_test).astype(np.uint8))
 
-                test_accu += A_test
-                test_samp += mbs_test
+            test_accu += A_test
+            test_samp += mbs_test
 
-    if args.mlperf_logging:
-        with record_function("DLRM mlperf sklearn metrics compute"):
-            scores = np.concatenate(scores, axis=0)
-            targets = np.concatenate(targets, axis=0)
-
-            metrics = {
-                "recall": lambda y_true, y_score: sklearn.metrics.recall_score(
-                    y_true=y_true, y_pred=np.round(y_score)
-                ),
-                "precision": lambda y_true, y_score: sklearn.metrics.precision_score(
-                    y_true=y_true, y_pred=np.round(y_score)
-                ),
-                "f1": lambda y_true, y_score: sklearn.metrics.f1_score(
-                    y_true=y_true, y_pred=np.round(y_score)
-                ),
-                "ap": sklearn.metrics.average_precision_score,
-                "roc_auc": sklearn.metrics.roc_auc_score,
-                "accuracy": lambda y_true, y_score: sklearn.metrics.accuracy_score(
-                    y_true=y_true, y_pred=np.round(y_score)
-                ),
-            }
-
-        validation_results = {}
-        for metric_name, metric_function in metrics.items():
-            validation_results[metric_name] = metric_function(targets, scores)
-            writer.add_scalar(
-                "mlperf-metrics-test/" + metric_name,
-                validation_results[metric_name],
-                log_iter,
-            )
-        acc_test = validation_results["accuracy"]
-    else:
-        acc_test = test_accu / test_samp
-        writer.add_scalar("Test/Acc", acc_test, log_iter)
+    acc_test = test_accu / test_samp
 
     model_metrics_dict = {
         "nepochs": args.nepochs,
@@ -854,37 +815,15 @@ def inference(
         "test_acc": acc_test,
     }
 
-    if args.mlperf_logging:
-        is_best = validation_results["roc_auc"] > best_auc_test
-        if is_best:
-            best_auc_test = validation_results["roc_auc"]
-            model_metrics_dict["test_auc"] = best_auc_test
-        print(
-            "recall {:.4f}, precision {:.4f},".format(
-                validation_results["recall"],
-                validation_results["precision"],
-            )
-            + " f1 {:.4f}, ap {:.4f},".format(
-                validation_results["f1"], validation_results["ap"]
-            )
-            + " auc {:.4f}, best auc {:.4f},".format(
-                validation_results["roc_auc"], best_auc_test
-            )
-            + " accuracy {:3.3f} %, best accuracy {:3.3f} %".format(
-                validation_results["accuracy"] * 100, best_acc_test * 100
-            ),
-            flush=True,
-        )
-    else:
-        is_best = acc_test > best_acc_test
-        if is_best:
-            best_acc_test = acc_test
-        print(
-            " accuracy {:3.3f} %, best {:3.3f} %".format(
-                acc_test * 100, best_acc_test * 100
-            ),
-            flush=True,
-        )
+    is_best = acc_test > best_acc_test
+    if is_best:
+        best_acc_test = acc_test
+    print(
+        " accuracy {:3.3f} %, best {:3.3f} %".format(
+            acc_test * 100, best_acc_test * 100
+        ),
+        flush=True,
+    )
     return model_metrics_dict, is_best
 
 
@@ -1012,12 +951,6 @@ def run():
     global writer
     args = parser.parse_args()
 
-    if args.mlperf_logging:
-        mlperf_logger.log_event(key=mlperf_logger.constants.CACHE_CLEAR, value=True)
-        mlperf_logger.log_start(
-            key=mlperf_logger.constants.INIT_START, log_all_ranks=True
-        )
-
     if args.weighted_pooling is not None:
         if args.qr_flag:
             sys.exit("ERROR: quotient remainder with weighted pooling is not supported")
@@ -1069,13 +1002,6 @@ def run():
     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
     # input data
 
-    if args.mlperf_logging:
-        mlperf_logger.barrier()
-        mlperf_logger.log_end(key=mlperf_logger.constants.INIT_STOP)
-        mlperf_logger.barrier()
-        mlperf_logger.log_start(key=mlperf_logger.constants.RUN_START)
-        mlperf_logger.barrier()
-
     if args.data_generation == "dataset":
         train_data, train_ld, test_data, test_ld = dp.make_criteo_data_and_loaders(args)
         table_feature_map = {idx: idx for idx in range(len(train_data.counts))}
@@ -1105,8 +1031,6 @@ def run():
         nbatches = args.num_batches if args.num_batches > 0 else len(train_ld)
 
     args.ln_emb = ln_emb.tolist()
-    if args.mlperf_logging:
-        print("command line args: ", json.dumps(vars(args)))
 
     ### parse command line arguments ###
     m_spa = args.arch_sparse_feature_size
@@ -1349,15 +1273,6 @@ def run():
     total_iter = 0
     total_samp = 0
 
-    if args.mlperf_logging:
-        mlperf_logger.mlperf_submission_log("dlrm")
-        mlperf_logger.log_event(
-            key=mlperf_logger.constants.SEED, value=args.numpy_rand_seed
-        )
-        mlperf_logger.log_event(
-            key=mlperf_logger.constants.GLOBAL_BATCH_SIZE, value=args.mini_batch_size
-        )
-
     # Load model is specified
     if not (args.load_model == ""):
         print("Loading saved model {}".format(args.load_model))
@@ -1386,8 +1301,6 @@ def run():
         ld_nbatches_test = ld_model["nbatches_test"]
         ld_train_loss = ld_model["train_loss"]
         ld_total_loss = ld_model["total_loss"]
-        if args.mlperf_logging:
-            ld_gAUC_test = ld_model["test_auc"]
         ld_acc_test = ld_model["test_acc"]
         if not args.inference_only:
             optimizer.load_state_dict(ld_model["opt_state_dict"])
@@ -1409,14 +1322,7 @@ def run():
                 ld_train_loss,
             )
         )
-        if args.mlperf_logging:
-            print(
-                "Testing state: accuracy = {:3.3f} %, auc = {:.3f}".format(
-                    ld_acc_test * 100, ld_gAUC_test
-                )
-            )
-        else:
-            print("Testing state: accuracy = {:3.3f} %".format(ld_acc_test * 100))
+        print("Testing state: accuracy = {:3.3f} %".format(ld_acc_test * 100))
 
     if args.inference_only:
         # Currently only dynamic quantization with INT8 and FP16 weights are
@@ -1450,28 +1356,6 @@ def run():
 
     print("time/loss/accuracy (if enabled):")
 
-    if args.mlperf_logging:
-        # LR is logged twice for now because of a compliance checker bug
-        mlperf_logger.log_event(
-            key=mlperf_logger.constants.OPT_BASE_LR, value=args.learning_rate
-        )
-        mlperf_logger.log_event(
-            key=mlperf_logger.constants.OPT_LR_WARMUP_STEPS,
-            value=args.lr_num_warmup_steps,
-        )
-
-        # use logging keys from the official HP table and not from the logging library
-        mlperf_logger.log_event(
-            key="sgd_opt_base_learning_rate", value=args.learning_rate
-        )
-        mlperf_logger.log_event(
-            key="lr_decay_start_steps", value=args.lr_decay_start_step
-        )
-        mlperf_logger.log_event(
-            key="sgd_opt_learning_rate_decay_steps", value=args.lr_num_decay_steps
-        )
-        mlperf_logger.log_event(key="sgd_opt_learning_rate_decay_poly_power", value=2)
-
     tb_file = "./" + args.tensor_board_filename
     writer = SummaryWriter(tb_file)
 
@@ -1483,26 +1367,9 @@ def run():
             k = 0
             total_time_begin = 0
             while k < args.nepochs:
-                if args.mlperf_logging:
-                    mlperf_logger.barrier()
-                    mlperf_logger.log_start(
-                        key=mlperf_logger.constants.BLOCK_START,
-                        metadata={
-                            mlperf_logger.constants.FIRST_EPOCH_NUM: (k + 1),
-                            mlperf_logger.constants.EPOCH_COUNT: 1,
-                        },
-                    )
-                    mlperf_logger.barrier()
-                    mlperf_logger.log_start(
-                        key=mlperf_logger.constants.EPOCH_START,
-                        metadata={mlperf_logger.constants.EPOCH_NUM: (k + 1)},
-                    )
 
                 if k < skip_upto_epoch:
                     continue
-
-                if args.mlperf_logging:
-                    previous_iteration_time = None
 
                 for j, inputBatch in enumerate(train_ld):
                     if j == 0 and args.save_onnx:
@@ -1513,15 +1380,7 @@ def run():
 
                     X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
 
-                    if args.mlperf_logging:
-                        current_time = time_wrap(use_gpu)
-                        if previous_iteration_time:
-                            iteration_time = current_time - previous_iteration_time
-                        else:
-                            iteration_time = 0
-                        previous_iteration_time = current_time
-                    else:
-                        t1 = time_wrap(use_gpu)
+                    t1 = time_wrap(use_gpu)
 
                     # early exit if nbatches was set by the user and has been exceeded
                     if nbatches > 0 and j >= nbatches:
@@ -1581,11 +1440,8 @@ def run():
                             optimizer.step()
                             lr_scheduler.step()
 
-                    if args.mlperf_logging:
-                        total_time += iteration_time
-                    else:
-                        t2 = time_wrap(use_gpu)
-                        total_time += t2 - t1
+                    t2 = time_wrap(use_gpu)
+                    total_time += t2 - t1
 
                     total_loss += L * mbs
                     total_iter += 1
@@ -1634,18 +1490,7 @@ def run():
                     # testing
                     if should_test:
                         epoch_num_float = (j + 1) / len(train_ld) + k + 1
-                        if args.mlperf_logging:
-                            mlperf_logger.barrier()
-                            mlperf_logger.log_start(
-                                key=mlperf_logger.constants.EVAL_START,
-                                metadata={
-                                    mlperf_logger.constants.EPOCH_NUM: epoch_num_float
-                                },
-                            )
 
-                        # don't measure training iter time in a test iteration
-                        if args.mlperf_logging:
-                            previous_iteration_time = None
                         print(
                             "Testing at - {}/{} of epoch {},".format(j + 1, nbatches, k)
                         )
@@ -1674,71 +1519,12 @@ def run():
                             print("Saving model to {}".format(args.save_model))
                             torch.save(model_metrics_dict, args.save_model)
 
-                        if args.mlperf_logging:
-                            mlperf_logger.barrier()
-                            mlperf_logger.log_end(
-                                key=mlperf_logger.constants.EVAL_STOP,
-                                metadata={
-                                    mlperf_logger.constants.EPOCH_NUM: epoch_num_float
-                                },
-                            )
-
                         # Uncomment the line below to print out the total time with overhead
                         # print("Total test time for this group: {}" \
                         # .format(time_wrap(use_gpu) - accum_test_time_begin))
 
-                        if (
-                            args.mlperf_logging
-                            and (args.mlperf_acc_threshold > 0)
-                            and (best_acc_test > args.mlperf_acc_threshold)
-                        ):
-                            print(
-                                "MLPerf testing accuracy threshold "
-                                + str(args.mlperf_acc_threshold)
-                                + " reached, stop training"
-                            )
-                            break
-
-                        if (
-                            args.mlperf_logging
-                            and (args.mlperf_auc_threshold > 0)
-                            and (best_auc_test > args.mlperf_auc_threshold)
-                        ):
-                            print(
-                                "MLPerf testing auc threshold "
-                                + str(args.mlperf_auc_threshold)
-                                + " reached, stop training"
-                            )
-                            if args.mlperf_logging:
-                                mlperf_logger.barrier()
-                                mlperf_logger.log_end(
-                                    key=mlperf_logger.constants.RUN_STOP,
-                                    metadata={
-                                        mlperf_logger.constants.STATUS: mlperf_logger.constants.SUCCESS
-                                    },
-                                )
-                            break
-
-                if args.mlperf_logging:
-                    mlperf_logger.barrier()
-                    mlperf_logger.log_end(
-                        key=mlperf_logger.constants.EPOCH_STOP,
-                        metadata={mlperf_logger.constants.EPOCH_NUM: (k + 1)},
-                    )
-                    mlperf_logger.barrier()
-                    mlperf_logger.log_end(
-                        key=mlperf_logger.constants.BLOCK_STOP,
-                        metadata={mlperf_logger.constants.FIRST_EPOCH_NUM: (k + 1)},
-                    )
                 k += 1  # nepochs
-            if args.mlperf_logging and best_auc_test <= args.mlperf_auc_threshold:
-                mlperf_logger.barrier()
-                mlperf_logger.log_end(
-                    key=mlperf_logger.constants.RUN_STOP,
-                    metadata={
-                        mlperf_logger.constants.STATUS: mlperf_logger.constants.ABORTED
-                    },
-                )
+
         else:
             print("Testing for inference only")
             inference(
@@ -1765,102 +1551,12 @@ def run():
         prof.export_chrome_trace("dlrm_s_pytorch" + time_stamp + ".json")
         # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
-    # plot compute graph
-    if args.plot_compute_graph:
-        sys.exit(
-            "ERROR: Please install pytorchviz package in order to use the"
-            + " visualization. Then, uncomment its import above as well as"
-            + " three lines below and run the code again."
-        )
-        # V = Z.mean() if args.inference_only else E
-        # dot = make_dot(V, params=dict(dlrm.named_parameters()))
-        # dot.render('dlrm_s_pytorch_graph') # write .pdf file
-
     # test prints
     if not args.inference_only and args.debug_mode:
         print("updated parameters (weights and bias):")
         for param in dlrm.parameters():
             print(param.detach().cpu().numpy())
 
-    # export the model in onnx
-    if args.save_onnx:
-        """
-        # workaround 1: tensor -> list
-        if torch.is_tensor(lS_i_onnx):
-            lS_i_onnx = [lS_i_onnx[j] for j in range(len(lS_i_onnx))]
-        # workaound 2: list -> tensor
-        lS_i_onnx = torch.stack(lS_i_onnx)
-        """
-        # debug prints
-        # print("inputs", X_onnx, lS_o_onnx, lS_i_onnx)
-        # print("output", dlrm_wrap(X_onnx, lS_o_onnx, lS_i_onnx, use_gpu, device))
-        dlrm_pytorch_onnx_file = "dlrm_s_pytorch.onnx"
-        batch_size = X_onnx.shape[0]
-        print("X_onnx.shape", X_onnx.shape)
-        if torch.is_tensor(lS_o_onnx):
-            print("lS_o_onnx.shape", lS_o_onnx.shape)
-        else:
-            for oo in lS_o_onnx:
-                print("oo.shape", oo.shape)
-        if torch.is_tensor(lS_i_onnx):
-            print("lS_i_onnx.shape", lS_i_onnx.shape)
-        else:
-            for ii in lS_i_onnx:
-                print("ii.shape", ii.shape)
-
-        # name inputs and outputs
-        o_inputs = (
-            ["offsets"]
-            if torch.is_tensor(lS_o_onnx)
-            else ["offsets_" + str(i) for i in range(len(lS_o_onnx))]
-        )
-        i_inputs = (
-            ["indices"]
-            if torch.is_tensor(lS_i_onnx)
-            else ["indices_" + str(i) for i in range(len(lS_i_onnx))]
-        )
-        all_inputs = ["dense_x"] + o_inputs + i_inputs
-        # debug prints
-        print("inputs", all_inputs)
-
-        # create dynamic_axis dictionaries
-        do_inputs = (
-            [{"offsets": {1: "batch_size"}}]
-            if torch.is_tensor(lS_o_onnx)
-            else [
-                {"offsets_" + str(i): {0: "batch_size"}} for i in range(len(lS_o_onnx))
-            ]
-        )
-        di_inputs = (
-            [{"indices": {1: "batch_size"}}]
-            if torch.is_tensor(lS_i_onnx)
-            else [
-                {"indices_" + str(i): {0: "batch_size"}} for i in range(len(lS_i_onnx))
-            ]
-        )
-        dynamic_axes = {"dense_x": {0: "batch_size"}, "pred": {0: "batch_size"}}
-        for do in do_inputs:
-            dynamic_axes.update(do)
-        for di in di_inputs:
-            dynamic_axes.update(di)
-        # debug prints
-        print(dynamic_axes)
-        # export model
-        torch.onnx.export(
-            dlrm,
-            (X_onnx, lS_o_onnx, lS_i_onnx),
-            dlrm_pytorch_onnx_file,
-            verbose=True,
-            use_external_data_format=True,
-            opset_version=11,
-            input_names=all_inputs,
-            output_names=["pred"],
-            dynamic_axes=dynamic_axes,
-        )
-        # recover the model back
-        dlrm_pytorch_onnx = onnx.load("dlrm_s_pytorch.onnx")
-        # check the onnx model
-        onnx.checker.check_model(dlrm_pytorch_onnx)
     total_time_end = time_wrap(use_gpu)
 
 
