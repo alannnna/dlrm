@@ -156,11 +156,11 @@ class DLRM_Net(nn.Module):
 
     def __init__(
         self,
-        m_spa=None,
-        ln_emb=None,
-        ln_bot=None,
-        ln_top=None,
-        arch_interaction_op=None,
+        m_spa,
+        ln_emb,
+        ln_bot,
+        ln_top,
+        arch_interaction_op,
         arch_interaction_itself=False,
         sigmoid_bot=-1,
         sigmoid_top=-1,
@@ -169,46 +169,33 @@ class DLRM_Net(nn.Module):
     ):
         super(DLRM_Net, self).__init__()
 
-        if (
-            (m_spa is not None)
-            and (ln_emb is not None)
-            and (ln_bot is not None)
-            and (ln_top is not None)
-            and (arch_interaction_op is not None)
-        ):
+        # save arguments
+        self.output_d = 0
+        self.parallel_model_batch_size = -1
+        self.parallel_model_is_not_prepared = True
+        self.arch_interaction_op = arch_interaction_op
+        self.arch_interaction_itself = arch_interaction_itself
+        self.loss_threshold = loss_threshold
+        if weighted_pooling is not None and weighted_pooling != "fixed":
+            self.weighted_pooling = "learned"
+        else:
+            self.weighted_pooling = weighted_pooling
 
-            # save arguments
-            self.output_d = 0
-            self.parallel_model_batch_size = -1
-            self.parallel_model_is_not_prepared = True
-            self.arch_interaction_op = arch_interaction_op
-            self.arch_interaction_itself = arch_interaction_itself
-            self.loss_threshold = loss_threshold
-            if weighted_pooling is not None and weighted_pooling != "fixed":
-                self.weighted_pooling = "learned"
-            else:
-                self.weighted_pooling = weighted_pooling
+        # create operators
+        self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
+        if self.weighted_pooling == "learned":
+            self.v_W_l = nn.ParameterList()
+            for w in w_list:
+                self.v_W_l.append(Parameter(w))
+        else:
+            self.v_W_l = w_list
+        self.bot_l = self.create_mlp(ln_bot, sigmoid_bot)
+        self.top_l = self.create_mlp(ln_top, sigmoid_top)
 
-            # create operators
-            self.emb_l, w_list = self.create_emb(m_spa, ln_emb, weighted_pooling)
-            if self.weighted_pooling == "learned":
-                self.v_W_l = nn.ParameterList()
-                for w in w_list:
-                    self.v_W_l.append(Parameter(w))
-            else:
-                self.v_W_l = w_list
-            self.bot_l = self.create_mlp(ln_bot, sigmoid_bot)
-            self.top_l = self.create_mlp(ln_top, sigmoid_top)
-
-            # specify the loss function
-            self.loss_fn = torch.nn.MSELoss(reduction="mean")
+        # specify the loss function
+        self.loss_fn = torch.nn.MSELoss(reduction="mean")
 
     def apply_mlp(self, x, layers):
-        # approach 1: use ModuleList
-        # for layer in layers:
-        #     x = layer(x)
-        # return x
-        # approach 2: use Sequential container to wrap all layers
         return layers(x)
 
     def apply_emb(self, lS_o, lS_i, emb_l, v_W_l):
@@ -284,18 +271,12 @@ class DLRM_Net(nn.Module):
     def forward(self, dense_x, lS_o, lS_i):
         # process dense features (using bottom mlp), resulting in a row vector
         x = self.apply_mlp(dense_x, self.bot_l)
-        # debug prints
-        # print("intermediate")
-        # print(x.detach().cpu().numpy())
 
         # process sparse features(using embeddings), resulting in a list of row vectors
         ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l)
-        # for y in ly:
-        #     print(y.detach().cpu().numpy())
 
         # interact features (dense and sparse)
         z = self.interact_features(x, ly)
-        # print(z.detach().cpu().numpy())
 
         # obtain probability of a click (using top mlp)
         p = self.apply_mlp(z, self.top_l)
@@ -326,10 +307,9 @@ def run():
         "--arch-interaction-op", type=str, choices=["dot", "cat"], default="dot"
     )
     parser.add_argument("--arch-interaction-itself", action="store_true", default=False)
-    parser.add_argument("--weighted-pooling", type=str, default=None)
+    parser.add_argument("--weighted-pooling", type=str, default=None) # none, fixed, or learned
     # activations and loss
     parser.add_argument("--loss-threshold", type=float, default=0.0)  # 1.0e-7
-    parser.add_argument("--round-targets", type=bool, default=False)
     # data
     parser.add_argument("--data-size", type=int, default=1)
     parser.add_argument("--num-batches", type=int, default=0)

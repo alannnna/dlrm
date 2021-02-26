@@ -35,7 +35,6 @@ class RandomDataset(Dataset):
             num_indices_per_lookup,
             num_indices_per_lookup_fixed,
             num_targets=1,
-            round_targets=False,
             reset_seed_on_access=False,
             rand_data_dist="uniform",
             rand_data_min=1,
@@ -58,7 +57,6 @@ class RandomDataset(Dataset):
         self.num_indices_per_lookup = num_indices_per_lookup
         self.num_indices_per_lookup_fixed = num_indices_per_lookup_fixed
         self.num_targets = num_targets
-        self.round_targets = round_targets
         self.reset_seed_on_access = reset_seed_on_access
         self.rand_seed = rand_seed
         self.rand_data_dist = rand_data_dist
@@ -100,7 +98,7 @@ class RandomDataset(Dataset):
         )
 
         # generate a batch of target (probability of a click)
-        T = generate_random_output_batch(n, self.num_targets, self.round_targets)
+        T = generate_random_output_batch(n, self.num_targets)
 
         return (X, lS_o, lS_i, T)
 
@@ -110,12 +108,9 @@ class RandomDataset(Dataset):
         return self.num_batches
 
 
-def generate_random_output_batch(n, num_targets, round_targets=False):
+def generate_random_output_batch(n, num_targets):
     # target (probability of a click)
-    if round_targets:
-        P = np.round(ra.rand(n, num_targets).astype(np.float32)).astype(np.float32)
-    else:
-        P = ra.rand(n, num_targets).astype(np.float32)
+    P = ra.rand(n, num_targets).astype(np.float32)
 
     return torch.tensor(P)
 
@@ -191,7 +186,6 @@ def make_random_data_and_loader(args, ln_emb, m_den):
         args.num_indices_per_lookup,
         args.num_indices_per_lookup_fixed,
         1,  # num_targets
-        args.round_targets,
         reset_seed_on_access=True,
         rand_data_min=args.rand_data_min,
         rand_data_max=args.rand_data_max,
