@@ -253,7 +253,6 @@ class DLRM_Net(nn.Module):
         arch_interaction_itself=False,
         sigmoid_bot=-1,
         sigmoid_top=-1,
-        sync_dense_params=True,
         loss_threshold=0.0,
         ndevices=-1,
         qr_flag=False,
@@ -281,7 +280,6 @@ class DLRM_Net(nn.Module):
             self.parallel_model_is_not_prepared = True
             self.arch_interaction_op = arch_interaction_op
             self.arch_interaction_itself = arch_interaction_itself
-            self.sync_dense_params = sync_dense_params
             self.loss_threshold = loss_threshold
             if weighted_pooling is not None and weighted_pooling != "fixed":
                 self.weighted_pooling = "learned"
@@ -422,32 +420,6 @@ class DLRM_Net(nn.Module):
         return z
 
 
-def dash_separated_ints(value):
-    vals = value.split("-")
-    for val in vals:
-        try:
-            int(val)
-        except ValueError:
-            raise argparse.ArgumentTypeError(
-                "%s is not a valid dash separated list of ints" % value
-            )
-
-    return value
-
-
-def dash_separated_floats(value):
-    vals = value.split("-")
-    for val in vals:
-        try:
-            float(val)
-        except ValueError:
-            raise argparse.ArgumentTypeError(
-                "%s is not a valid dash separated list of floats" % value
-            )
-
-    return value
-
-
 def inference(
     args,
     dlrm,
@@ -483,12 +455,6 @@ def inference(
             device,
             ndevices=ndevices,
         )
-        ### gather the distributed results on each rank ###
-        # For some reason it requires explicit sync before all_gather call if
-        # tensor is on GPU memory
-        if Z_test.is_cuda:
-            torch.cuda.synchronize()
-        (_, batch_split_lengths) = ext_dist.get_split_lengths(X_test.size(0))
 
         with record_function("DLRM accuracy compute"):
             # compute loss and accuracy
@@ -531,11 +497,11 @@ def run():
     # model related parameters
     parser.add_argument("--arch-sparse-feature-size", type=int, default=2)
     parser.add_argument(
-        "--arch-embedding-size", type=dash_separated_ints, default="4-3-2"
+        "--arch-embedding-size", type=str, default="4-3-2"
     )
     # j will be replaced with the table number
-    parser.add_argument("--arch-mlp-bot", type=dash_separated_ints, default="4-3-2")
-    parser.add_argument("--arch-mlp-top", type=dash_separated_ints, default="4-2-1")
+    parser.add_argument("--arch-mlp-bot", type=str, default="4-3-2")
+    parser.add_argument("--arch-mlp-top", type=str, default="4-2-1")
     parser.add_argument(
         "--arch-interaction-op", type=str, choices=["dot", "cat"], default="dot"
     )
@@ -584,7 +550,6 @@ def run():
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--print-precision", type=int, default=5)
     parser.add_argument("--numpy-rand-seed", type=int, default=123)
-    parser.add_argument("--sync-dense-params", type=bool, default=True)
     parser.add_argument("--optimizer", type=str, default="sgd")
     parser.add_argument(
         "--dataset-multiprocessing",
@@ -599,9 +564,6 @@ def run():
     parser.add_argument("--inference-only", action="store_true", default=False)
     # gpu
     parser.add_argument("--use-gpu", action="store_true", default=False)
-    # distributed
-    parser.add_argument("--local_rank", type=int, default=-1)
-    parser.add_argument("--dist-backend", type=str, default="")
     # debugging and profiling
     parser.add_argument("--print-freq", type=int, default=1)
     parser.add_argument("--test-freq", type=int, default=-1)
@@ -836,7 +798,6 @@ def run():
         arch_interaction_itself=args.arch_interaction_itself,
         sigmoid_bot=-1,
         sigmoid_top=ln_top.size - 2,
-        sync_dense_params=args.sync_dense_params,
         loss_threshold=args.loss_threshold,
         ndevices=ndevices,
         qr_flag=args.qr_flag,
