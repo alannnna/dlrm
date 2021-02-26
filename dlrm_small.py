@@ -927,9 +927,6 @@ def run():
     parser.add_argument("--enable-profiling", action="store_true", default=False)
     parser.add_argument("--plot-compute-graph", action="store_true", default=False)
     parser.add_argument("--tensor-board-filename", type=str, default="run_kaggle_pt")
-    # store/load model
-    parser.add_argument("--save-model", type=str, default="")
-    parser.add_argument("--load-model", type=str, default="")
     # mlperf logging (disables other output and stops early)
     parser.add_argument("--mlperf-logging", action="store_true", default=False)
     # stop at target accuracy Kaggle 0.789, Terabyte (sub-sampled=0.875) 0.8107
@@ -1222,44 +1219,43 @@ def run():
             dlrm.bot_l = ext_dist.DDP(dlrm.bot_l)
             dlrm.top_l = ext_dist.DDP(dlrm.top_l)
 
-    if not args.inference_only:
-        if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
-            sys.exit("GPU version of Adagrad is not supported by PyTorch.")
-        # specify the optimizer algorithm
-        opts = {
-            "sgd": torch.optim.SGD,
-            "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
-            "adagrad": torch.optim.Adagrad,
-        }
+    if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
+        sys.exit("GPU version of Adagrad is not supported by PyTorch.")
+    # specify the optimizer algorithm
+    opts = {
+        "sgd": torch.optim.SGD,
+        "rwsadagrad": RowWiseSparseAdagrad.RWSAdagrad,
+        "adagrad": torch.optim.Adagrad,
+    }
 
-        parameters = (
-            dlrm.parameters()
-            if ext_dist.my_size == 1
-            else [
-                {
-                    "params": [p for emb in dlrm.emb_l for p in emb.parameters()],
-                    "lr": args.learning_rate,
-                },
-                # TODO check this lr setup
-                # bottom mlp has no data parallelism
-                # need to check how do we deal with top mlp
-                {
-                    "params": dlrm.bot_l.parameters(),
-                    "lr": args.learning_rate,
-                },
-                {
-                    "params": dlrm.top_l.parameters(),
-                    "lr": args.learning_rate,
-                },
-            ]
-        )
-        optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
-        lr_scheduler = LRPolicyScheduler(
-            optimizer,
-            args.lr_num_warmup_steps,
-            args.lr_decay_start_step,
-            args.lr_num_decay_steps,
-        )
+    parameters = (
+        dlrm.parameters()
+        if ext_dist.my_size == 1
+        else [
+            {
+                "params": [p for emb in dlrm.emb_l for p in emb.parameters()],
+                "lr": args.learning_rate,
+            },
+            # TODO check this lr setup
+            # bottom mlp has no data parallelism
+            # need to check how do we deal with top mlp
+            {
+                "params": dlrm.bot_l.parameters(),
+                "lr": args.learning_rate,
+            },
+            {
+                "params": dlrm.top_l.parameters(),
+                "lr": args.learning_rate,
+            },
+        ]
+    )
+    optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
+    lr_scheduler = LRPolicyScheduler(
+        optimizer,
+        args.lr_num_warmup_steps,
+        args.lr_decay_start_step,
+        args.lr_num_decay_steps,
+    )
 
     ### main loop ###
 
@@ -1272,57 +1268,6 @@ def run():
     total_loss = 0
     total_iter = 0
     total_samp = 0
-
-    # Load model is specified
-    if not (args.load_model == ""):
-        print("Loading saved model {}".format(args.load_model))
-        if use_gpu:
-            if dlrm.ndevices > 1:
-                # NOTE: when targeting inference on multiple GPUs,
-                # load the model as is on CPU or GPU, with the move
-                # to multiple GPUs to be done in parallel_forward
-                ld_model = torch.load(args.load_model)
-            else:
-                # NOTE: when targeting inference on single GPU,
-                # note that the call to .to(device) has already happened
-                ld_model = torch.load(
-                    args.load_model,
-                    map_location=torch.device("cuda")
-                    # map_location=lambda storage, loc: storage.cuda(0)
-                )
-        else:
-            # when targeting inference on CPU
-            ld_model = torch.load(args.load_model, map_location=torch.device("cpu"))
-        dlrm.load_state_dict(ld_model["state_dict"])
-        ld_j = ld_model["iter"]
-        ld_k = ld_model["epoch"]
-        ld_nepochs = ld_model["nepochs"]
-        ld_nbatches = ld_model["nbatches"]
-        ld_nbatches_test = ld_model["nbatches_test"]
-        ld_train_loss = ld_model["train_loss"]
-        ld_total_loss = ld_model["total_loss"]
-        ld_acc_test = ld_model["test_acc"]
-        if not args.inference_only:
-            optimizer.load_state_dict(ld_model["opt_state_dict"])
-            best_acc_test = ld_acc_test
-            total_loss = ld_total_loss
-            skip_upto_epoch = ld_k  # epochs
-            skip_upto_batch = ld_j  # batches
-        else:
-            args.print_freq = ld_nbatches
-            args.test_freq = 0
-
-        print(
-            "Saved at: epoch = {:d}/{:d}, batch = {:d}/{:d}, ntbatch = {:d}".format(
-                ld_k, ld_nepochs, ld_j, ld_nbatches, ld_nbatches_test
-            )
-        )
-        print(
-            "Training state: loss = {:.6f}".format(
-                ld_train_loss,
-            )
-        )
-        print("Testing state: accuracy = {:3.3f} %".format(ld_acc_test * 100))
 
     print("time/loss/accuracy (if enabled):")
 
@@ -1433,17 +1378,13 @@ def run():
                     train_loss = total_loss / total_samp
                     total_loss = 0
 
-                    str_run_type = (
-                        "inference" if args.inference_only else "training"
-                    )
-
                     wall_time = ""
                     if args.print_wall_time:
                         wall_time = " ({})".format(time.strftime("%H:%M"))
 
                     print(
                         "Finished {} it {}/{} of epoch {}, {:.2f} ms/it,".format(
-                            str_run_type, j + 1, nbatches, k, gT
+                            "training", j + 1, nbatches, k, gT
                         )
                         + " loss {:.6f}".format(train_loss)
                         + wall_time,
@@ -1474,20 +1415,6 @@ def run():
                         log_iter,
                     )
 
-                    if (
-                        is_best
-                        and not (args.save_model == "")
-                        and not args.inference_only
-                    ):
-                        model_metrics_dict["epoch"] = k
-                        model_metrics_dict["iter"] = j + 1
-                        model_metrics_dict["train_loss"] = train_loss
-                        model_metrics_dict[
-                            "opt_state_dict"
-                        ] = optimizer.state_dict()
-                        print("Saving model to {}".format(args.save_model))
-                        torch.save(model_metrics_dict, args.save_model)
-
                     # Uncomment the line below to print out the total time with overhead
                     # print("Total test time for this group: {}" \
                     # .format(time_wrap(use_gpu) - accum_test_time_begin))
@@ -1509,7 +1436,7 @@ def run():
         # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
     # test prints
-    if not args.inference_only and args.debug_mode:
+    if args.debug_mode:
         print("updated parameters (weights and bias):")
         for param in dlrm.parameters():
             print(param.detach().cpu().numpy())
