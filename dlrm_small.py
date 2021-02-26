@@ -214,9 +214,6 @@ class DLRM_Net(nn.Module):
         emb_l = nn.ModuleList()
         v_W_l = []
         for i in range(0, ln.size):
-            if ext_dist.my_size > 1:
-                if i not in self.local_emb_indices:
-                    continue
             n = ln[i]
 
             # construct embedding operator
@@ -312,21 +309,6 @@ class DLRM_Net(nn.Module):
             self.md_flag = md_flag
             if self.md_flag:
                 self.md_threshold = md_threshold
-
-            # If running distributed, get local slice of embedding tables
-            if ext_dist.my_size > 1:
-                n_emb = len(ln_emb)
-                if n_emb < ext_dist.my_size:
-                    sys.exit(
-                        "only (%d) sparse features for (%d) devices, table partitions will fail"
-                        % (n_emb, ext_dist.my_size)
-                    )
-                self.n_global_emb = n_emb
-                self.n_local_emb, self.n_emb_per_rank = ext_dist.get_split_lengths(
-                    n_emb
-                )
-                self.local_emb_slice = ext_dist.get_my_slice(n_emb)
-                self.local_emb_indices = list(range(n_emb))[self.local_emb_slice]
 
             # create operators
             if ndevices <= 1:
@@ -449,8 +431,6 @@ class DLRM_Net(nn.Module):
         return R
 
     def forward(self, dense_x, lS_o, lS_i):
-        # Asserts replaced an if/else with multi-node and multi-device support
-        assert ext_dist.my_size <= 1
         assert self.ndevices <= 1
         # single device run
 
@@ -533,11 +513,6 @@ def inference(
             testBatch
         )
 
-        # Skip the batch if batch size not multiple of total ranks
-        if ext_dist.my_size > 1 and X_test.size(0) % ext_dist.my_size != 0:
-            print("Warning: Skiping the batch %d with size %d" % (i, X_test.size(0)))
-            continue
-
         # forward pass
         Z_test = dlrm_wrap(
             X_test,
@@ -553,8 +528,6 @@ def inference(
         if Z_test.is_cuda:
             torch.cuda.synchronize()
         (_, batch_split_lengths) = ext_dist.get_split_lengths(X_test.size(0))
-        if ext_dist.my_size > 1:
-            Z_test = ext_dist.all_gather(Z_test, batch_split_lengths)
 
         with record_function("DLRM accuracy compute"):
             # compute loss and accuracy
@@ -682,8 +655,6 @@ def run():
     parser.add_argument("--print-wall-time", action="store_true", default=False)
     parser.add_argument("--debug-mode", action="store_true", default=False)
     parser.add_argument("--enable-profiling", action="store_true", default=False)
-    parser.add_argument("--plot-compute-graph", action="store_true", default=False)
-    parser.add_argument("--tensor-board-filename", type=str, default="run_kaggle_pt")
     # mlperf logging (disables other output and stops early)
     parser.add_argument("--mlperf-logging", action="store_true", default=False)
     # stop at target accuracy Kaggle 0.789, Terabyte (sub-sampled=0.875) 0.8107
@@ -733,9 +704,6 @@ def run():
         args.test_num_workers = args.num_workers
 
     use_gpu = args.use_gpu and torch.cuda.is_available()
-
-    if not args.debug_mode:
-        ext_dist.init_distributed(local_rank=args.local_rank, use_gpu=use_gpu, backend=args.dist_backend)
 
     device = torch.device("cpu")
     print("Using CPU...")
@@ -940,11 +908,6 @@ def run():
             print(param.detach().cpu().numpy())
         # print(dlrm)
 
-    # distribute data parallel mlps
-    if ext_dist.my_size > 1:
-        dlrm.bot_l = ext_dist.DDP(dlrm.bot_l)
-        dlrm.top_l = ext_dist.DDP(dlrm.top_l)
-
     # specify the optimizer algorithm
     opts = {
         "sgd": torch.optim.SGD,
@@ -952,27 +915,7 @@ def run():
         "adagrad": torch.optim.Adagrad,
     }
 
-    parameters = (
-        dlrm.parameters()
-        if ext_dist.my_size == 1
-        else [
-            {
-                "params": [p for emb in dlrm.emb_l for p in emb.parameters()],
-                "lr": args.learning_rate,
-            },
-            # TODO check this lr setup
-            # bottom mlp has no data parallelism
-            # need to check how do we deal with top mlp
-            {
-                "params": dlrm.bot_l.parameters(),
-                "lr": args.learning_rate,
-            },
-            {
-                "params": dlrm.top_l.parameters(),
-                "lr": args.learning_rate,
-            },
-        ]
-    )
+    parameters = dlrm.parameters()
     optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
     lr_scheduler = LRPolicyScheduler(
         optimizer,
@@ -995,9 +938,6 @@ def run():
 
     print("time/loss/accuracy (if enabled):")
 
-    tb_file = "./" + args.tensor_board_filename
-
-    ext_dist.barrier()
     with torch.autograd.profiler.profile(
         args.enable_profiling, use_gpu, record_shapes=True
     ) as prof:
@@ -1023,14 +963,6 @@ def run():
                 if nbatches > 0 and j >= nbatches:
                     break
 
-                # Skip the batch if batch size not multiple of total ranks
-                if ext_dist.my_size > 1 and X.size(0) % ext_dist.my_size != 0:
-                    print(
-                        "Warning: Skiping the batch %d with size %d"
-                        % (j, X.size(0))
-                    )
-                    continue
-
                 mbs = T.shape[0]  # = args.mini_batch_size except maybe for last
 
                 # forward pass
@@ -1042,10 +974,6 @@ def run():
                     device,
                     ndevices=ndevices,
                 )
-
-                if ext_dist.my_size > 1:
-                    T = T[ext_dist.get_my_slice(mbs)]
-                    W = W[ext_dist.get_my_slice(mbs)]
 
                 # loss
                 E = loss_fn_wrap(Z, T, use_gpu, device)
