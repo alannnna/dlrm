@@ -89,7 +89,6 @@ from torch.nn.parallel.scatter_gather import gather, scatter
 from torch.nn.parameter import Parameter
 from torch.optim.lr_scheduler import _LRScheduler
 import optim.rwsadagrad as RowWiseSparseAdagrad
-from torch.utils.tensorboard import SummaryWriter
 
 # mixed-dimension trick
 from tricks.md_embedding_bag import PrEmbeddingBag, md_solver
@@ -414,26 +413,6 @@ class DLRM_Net(nn.Module):
         # print(ly)
         return ly
 
-    #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
-    def quantize_embedding(self, bits):
-
-        n = len(self.emb_l)
-        self.emb_l_q = [None] * n
-        for k in range(n):
-            if bits == 4:
-                self.emb_l_q[k] = ops.quantized.embedding_bag_4bit_prepack(
-                    self.emb_l[k].weight
-                )
-            elif bits == 8:
-                self.emb_l_q[k] = ops.quantized.embedding_bag_byte_prepack(
-                    self.emb_l[k].weight
-                )
-            else:
-                return
-        self.emb_l = None
-        self.quantize_emb = True
-        self.quantize_bits = bits
-
     def interact_features(self, x, ly):
 
         if self.arch_interaction_op == "dot":
@@ -723,7 +702,6 @@ def run():
     global args
     global nbatches
     global nbatches_test
-    global writer
     args = parser.parse_args()
 
     if args.weighted_pooling is not None:
@@ -1018,7 +996,6 @@ def run():
     print("time/loss/accuracy (if enabled):")
 
     tb_file = "./" + args.tensor_board_filename
-    writer = SummaryWriter(tb_file)
 
     ext_dist.barrier()
     with torch.autograd.profiler.profile(
@@ -1138,7 +1115,6 @@ def run():
                     )
 
                     log_iter = nbatches * k + j + 1
-                    writer.add_scalar("Train/Loss", train_loss, log_iter)
 
                     total_iter = 0
                     total_samp = 0
