@@ -36,9 +36,6 @@ class RandomDataset(Dataset):
             num_indices_per_lookup_fixed,
             num_targets=1,
             round_targets=False,
-            data_generation="random",
-            trace_file="",
-            enable_padding=False,
             reset_seed_on_access=False,
             rand_data_dist="uniform",
             rand_data_min=1,
@@ -64,9 +61,6 @@ class RandomDataset(Dataset):
         self.num_indices_per_lookup_fixed = num_indices_per_lookup_fixed
         self.num_targets = num_targets
         self.round_targets = round_targets
-        self.data_generation = data_generation
-        self.trace_file = trace_file
-        self.enable_padding = enable_padding
         self.reset_seed_on_access = reset_seed_on_access
         self.rand_seed = rand_seed
         self.rand_data_dist = rand_data_dist
@@ -97,33 +91,19 @@ class RandomDataset(Dataset):
         n = min(self.mini_batch_size, self.data_size - (index * self.mini_batch_size))
 
         # generate a batch of dense and sparse features
-        if self.data_generation == "random":
-            (X, lS_o, lS_i) = generate_dist_input_batch(
-                self.m_den,
-                self.ln_emb,
-                n,
-                self.num_indices_per_lookup,
-                self.num_indices_per_lookup_fixed,
-                rand_data_dist=self.rand_data_dist,
-                rand_data_min=self.rand_data_min,
-                rand_data_max=self.rand_data_max,
-                rand_data_mu=self.rand_data_mu,
-                rand_data_sigma=self.rand_data_sigma,
-            )
-        elif self.data_generation == "synthetic":
-            (X, lS_o, lS_i) = generate_synthetic_input_batch(
-                self.m_den,
-                self.ln_emb,
-                n,
-                self.num_indices_per_lookup,
-                self.num_indices_per_lookup_fixed,
-                self.trace_file,
-                self.enable_padding
-            )
-        else:
-            sys.exit(
-                "ERROR: --data-generation=" + self.data_generation + " is not supported"
-            )
+        # Random data generation (according to a distribution)
+        (X, lS_o, lS_i) = generate_dist_input_batch(
+            self.m_den,
+            self.ln_emb,
+            n,
+            self.num_indices_per_lookup,
+            self.num_indices_per_lookup_fixed,
+            rand_data_dist=self.rand_data_dist,
+            rand_data_min=self.rand_data_min,
+            rand_data_max=self.rand_data_max,
+            rand_data_mu=self.rand_data_mu,
+            rand_data_sigma=self.rand_data_sigma,
+        )
 
         # generate a batch of target (probability of a click)
         T = generate_random_output_batch(n, self.num_targets, self.round_targets)
@@ -229,9 +209,6 @@ def make_random_data_and_loader(args, ln_emb, m_den):
         args.num_indices_per_lookup_fixed,
         1,  # num_targets
         args.round_targets,
-        args.data_generation,
-        args.data_trace_file,
-        args.data_trace_enable_padding,
         reset_seed_on_access=True,
         rand_data_dist=args.rand_data_dist,
         rand_data_min=args.rand_data_min,
